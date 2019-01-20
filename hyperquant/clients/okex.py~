@@ -1,0 +1,312 @@
+import hashlib
+import hmac
+from operator import itemgetter
+
+from hyperquant.api import Platform, Sorting, Interval, Direction, OrderType
+from hyperquant.clients import WSClient, Endpoint, Trade, Error, ErrorCode, \
+    ParamName, WSConverter, RESTConverter, PrivatePlatformRESTClient, MyTrade, Candle, Ticker, OrderBookItem, Order, \
+    OrderBook, Account, Balance
+
+
+# REST
+
+# TODO check getting trades history from_id=1
+class OkexRESTConverterV1(RESTConverter):
+    ''' Okex REST Converter 
+	Currently supports trades and klines only
+	'''
+	# Main params:
+    base_url = "https://api.okex.com/api/v{version}/"
+
+    # Settings:
+
+    # Converting info:
+    # For converting to platform
+    endpoint_lookup = {
+        Endpoint.TRADE: "trades.do",
+        Endpoint.TRADE_HISTORY: "trades.do",
+        Endpoint.CANDLE: "klines.do",
+    }
+    param_name_lookup = {
+        ParamName.SYMBOL: "symbol",
+        ParamName.LIMIT: "size",
+        ParamName.IS_USE_MAX_LIMIT: None,
+        ParamName.INTERVAL: "interval",
+        ParamName.FROM_ITEM: "since",
+        ParamName.TO_ITEM: None,
+        ParamName.FROM_TIME: "since",
+        ParamName.TO_TIME: None,
+        ParamName.PRICE: "price",
+        ParamName.AMOUNT: "amount",
+    }
+    param_value_lookup = {
+        # Sorting.ASCENDING: None,
+        # Sorting.DESCENDING: None,
+        Sorting.DEFAULT_SORTING: Sorting.ASCENDING,
+
+        Interval.MIN_1: "1min",
+        Interval.MIN_3: "3min",
+        Interval.MIN_5: "5min",
+        Interval.MIN_15: "15min",
+        Interval.MIN_30: "30min",
+        Interval.HRS_1: "1hour",
+        Interval.HRS_2: "2hour",
+        Interval.HRS_4: "4hour",
+        Interval.HRS_6: "6hour",
+        Interval.HRS_8: "8hour",
+        Interval.HRS_12: "12hour",
+        Interval.DAY_1: "1day",
+        Interval.DAY_3: None, #"3d",
+        Interval.WEEK_1: "1week",
+        Interval.MONTH_1: None, #"1M",
+
+        # By properties:
+        ParamName.DIRECTION: {
+            Direction.SELL: "sell",
+            Direction.BUY: "buy",
+        },
+    }
+    max_limit_by_endpoint = {
+        Endpoint.TRADE: 1000,
+        Endpoint.TRADE_HISTORY: 1000,
+        Endpoint.ORDER_BOOK: 1000,
+        Endpoint.CANDLE: 1000,
+    }
+
+    # For parsing
+
+    param_lookup_by_class = {
+        # Error
+        Error: {
+            "code": "error_code",
+            "msg": "result",
+        },
+        # Data
+		Trade: {
+            "date": ParamName.TIMESTAMP,
+            "tid": ParamName.ITEM_ID,
+            "price": ParamName.PRICE,
+            "amount": ParamName.AMOUNT,
+            "date_ms": None,
+            "type": ParamName.DIRECTION,
+        },
+	    Candle: [
+            ParamName.TIMESTAMP,
+            ParamName.PRICE_OPEN,
+            ParamName.PRICE_HIGH,
+            ParamName.PRICE_LOW,
+            ParamName.PRICE_CLOSE,
+			ParamName.AMOUNT,  # only volume present
+        ],
+    }
+	#https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md
+    error_code_by_platform_error_code = {
+        -2014: ErrorCode.UNAUTHORIZED,
+        -1121: ErrorCode.WRONG_SYMBOL,
+        10000: ErrorCode.WRONG_PARAM,
+    }
+    error_code_by_http_status = {
+        429: ErrorCode.RATE_LIMIT,
+        418: ErrorCode.IP_BAN,
+    }
+
+    # For converting time
+    is_source_in_milliseconds = False
+
+    # timestamp_platform_names = [ParamName.TIMESTAMP]
+
+    def _process_param_value(self, name, value):
+        if name == ParamName.FROM_ITEM #or name == ParamName.TO_ITEM:
+            if isinstance(value, Trade):  # ItemObject):
+                return value.item_id
+        return super()._process_param_value(name, value)
+
+    # def parse(self, endpoint, data):
+        # if endpoint == Endpoint.SERVER_TIME and data:
+            # timestamp_ms = data.get("serverTime")
+            # return timestamp_ms / 1000 if not self.use_milliseconds and timestamp_ms else timestamp_ms
+        # if endpoint == Endpoint.SYMBOLS and data and ParamName.SYMBOLS in data:
+            # exchange_info = data[ParamName.SYMBOLS]
+            # # (There are only 2 statuses: "TRADING" and "BREAK")
+            # # symbols = [item[ParamName.SYMBOL] for item in exchange_info if item["status"] == "TRADING"]
+            # symbols = [item[ParamName.SYMBOL] for item in exchange_info]
+            # return symbols
+
+        # result = super().parse(endpoint, data)
+        # return result
+
+
+class OkexRESTClient(PrivatePlatformRESTClient):
+    # Settings:
+    platform_id = Platform.OKEX
+    version = "1"  # Default version
+
+    _converter_class_by_version = {
+        "1": OkexRESTConverterV1,
+    }
+
+    # State:
+    ratelimit_error_in_row_count = 0
+
+    @property
+    def headers(self):
+        result = super().headers
+        #result["X-MBX-APIKEY"] = self._api_key
+        result["Content-Type"] = "application/x-www-form-urlencoded"
+        return result
+
+    def _on_response(self, response, result):
+        # super()._on_response(response, result)
+
+        self.delay_before_next_request_sec = 0
+        if isinstance(result, Error):
+            if result.code == ErrorCode.RATE_LIMIT:
+                self.ratelimit_error_in_row_count += 1
+                self.delay_before_next_request_sec = 60 * 2 * self.ratelimit_error_in_row_count  # some number - change
+            elif result.code == ErrorCode.IP_BAN:
+                self.ratelimit_error_in_row_count += 1
+                self.delay_before_next_request_sec = 60 * 5 * self.ratelimit_error_in_row_count  # some number - change
+            else:
+                self.ratelimit_error_in_row_count = 0
+        else:
+            self.ratelimit_error_in_row_count = 0
+
+    # def fetch_history(self, endpoint, symbol, limit=None, from_item=None, to_item=None, sorting=None,
+                      # is_use_max_limit=False, from_time=None, to_time=None,
+                      # version=None, **kwargs):
+        # if from_item is None:
+            # from_item = 0
+        # return super().fetch_history(endpoint, symbol, limit, from_item, to_item, sorting, is_use_max_limit, from_time,
+                                     # to_time, **kwargs)
+
+
+
+    # def _send(self, method, endpoint, params=None, version=None, **kwargs):
+        # if endpoint in self.converter.secured_endpoints:
+            # server_timestamp = self.get_server_timestamp()
+            # params[ParamName.TIMESTAMP] = server_timestamp if self.use_milliseconds else int(server_timestamp * 1000)
+        # return super()._send(method, endpoint, params, version, **kwargs)
+
+
+# WebSocket
+
+class OkexWSConverterV1(WSConverter):
+    # Main params:
+    base_url = "wss://real.okex.com:10440"
+
+    #IS_SUBSCRIPTION_COMMAND_SUPPORTED = False
+
+    # supported_endpoints = [Endpoint.TRADE]
+    # symbol_endpoints = [Endpoint.TRADE]
+    # supported_symbols = None
+
+    # Settings:
+
+    # Converting info:
+    # For converting to platform
+
+    endpoint_lookup = {
+        Endpoint.TRADE: "{symbol}@trade",
+        Endpoint.CANDLE: "{symbol}@kline_{interval}",
+    }
+#websocket.send("{'event':'addChannel','channel':'ok_sub_spot_X_kline_Y'}");
+    # For parsing
+    param_lookup_by_class = {
+        # Error
+        Error: {
+            # "code": "code",
+            # "msg": "message",
+        },
+        # Data
+        Trade: {
+            "s": ParamName.SYMBOL,
+            "T": ParamName.TIMESTAMP,
+            "t": ParamName.ITEM_ID,
+            "p": ParamName.PRICE,
+            "q": ParamName.AMOUNT,
+            # "m": "",
+        },
+        Candle: {
+            "s": ParamName.SYMBOL,
+            "t": ParamName.TIMESTAMP,
+            "i": ParamName.INTERVAL,
+
+            "o": ParamName.PRICE_OPEN,
+            "c": ParamName.PRICE_CLOSE,
+            "h": ParamName.PRICE_HIGH,
+            "l": ParamName.PRICE_LOW,
+            "": ParamName.AMOUNT,  # only volume present
+            "n": ParamName.TRADES_COUNT,
+        },
+    }
+    event_type_param = "e"
+    endpoint_by_event_type = {
+        "trade": Endpoint.TRADE,
+        "kline": Endpoint.CANDLE,
+    }
+	
+	#https://github.com/okcoin-okex/API-docs-OKEx.com/blob/master/API-For-Spot-EN/Error%20Code%20For%20Spot.md
+    error_code_by_platform_error_code = {
+        # -2014: ErrorCode.UNAUTHORIZED,
+        # -1121: ErrorCode.WRONG_SYMBOL,
+        # -1100: ErrorCode.WRONG_PARAM,
+    }
+    error_code_by_http_status = {}
+
+    # For converting time
+    is_source_in_milliseconds = False
+
+    def parse(self, endpoint, data):
+        if "data" in data:
+            # stream = data["stream"]  # no need
+            data = data["data"]
+        return super().parse(endpoint, data)
+
+    def _parse_item(self, endpoint, item_data):
+        if endpoint == Endpoint.CANDLE and "k" in item_data:
+            item_data = item_data["k"]
+        return super()._parse_item(endpoint, item_data)
+
+
+class OkexWSClient(WSClient):
+    platform_id = Platform.OKEX
+    version = "1"  # Default version
+
+    _converter_class_by_version = {
+        "1": OkexWSConverterV1,
+    }
+
+    @property
+    def url(self):
+        # Generate subscriptions
+        if not self.current_subscriptions:
+            self.logger.warning("Making URL while current_subscriptions are empty. "
+                                "There is no sense to connect without subscriptions.")
+            subscriptions = ""
+            # # There is no sense to connect without subscriptions
+            # return None
+        elif len(self.current_subscriptions) > 1:
+            subscriptions = "stream?streams=" + "/".join(self.current_subscriptions)
+        else:
+            subscriptions = "ws/" + "".join(self.current_subscriptions)
+
+        self.is_subscribed_with_url = True
+        return super().url + subscriptions
+
+    def subscribe(self, endpoints=None, symbols=None, **params):
+        self._check_params(endpoints, symbols, **params)
+
+        super().subscribe(endpoints, symbols, **params)
+
+    def unsubscribe(self, endpoints=None, symbols=None, **params):
+        self._check_params(endpoints, symbols, **params)
+
+        super().unsubscribe(endpoints, symbols, **params)
+
+    def _check_params(self, endpoints=None, symbols=None, **params):
+        LEVELS_AVAILABLE = [5, 10, 20]
+        if endpoints and Endpoint.ORDER_BOOK in endpoints and ParamName.LEVEL in params and \
+                params.get(ParamName.LEVEL) not in LEVELS_AVAILABLE:
+            self.logger.error("For %s endpoint %s param must be of values: %s, but set: %s",
+                              Endpoint.ORDER_BOOK, ParamName.LEVEL, LEVELS_AVAILABLE,
+                              params.get(ParamName.LEVEL))
