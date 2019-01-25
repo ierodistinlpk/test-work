@@ -230,8 +230,9 @@ class OkexWSConverterV1(WSConverter):
             # "msg": "message",
         },
         # Data
-        Trade: [ParamName.ITEM_ID, ParamName.PRICE, ParamName.AMOUNT, ParamName.TIMESTAMP, ParamName.DIRECTION],
-        Candle:[ParamName.TIMESTAMP, ParamName.PRICE_OPEN, ParamName.PRICE_HIGH, ParamName.PRICE_LOW, ParamName.PRICE_CLOSE, ParamName.AMOUNT]       
+        #ParamName.SYMBOL is not from Okex spec but ectracted from subscription name
+        Trade: [ParamName.ITEM_ID, ParamName.PRICE, ParamName.AMOUNT, ParamName.TIMESTAMP, ParamName.DIRECTION, ParamName.SYMBOL],
+        Candle:[ParamName.TIMESTAMP, ParamName.PRICE_OPEN, ParamName.PRICE_HIGH, ParamName.PRICE_LOW, ParamName.PRICE_CLOSE, ParamName.AMOUNT,ParamName.SYMBOL]     
     }
     event_type_param = "e"
     endpoint_by_event_type = {
@@ -261,16 +262,17 @@ class OkexWSConverterV1(WSConverter):
         return super().generate_subscriptions(endpoints,symbols, **params)
 
     def _parse_item(self, endpoint, item_data):
-        endpoint = self.get_endpoint_type(item_data['channel'])
-        super()._parse_item(endpoint, item_data['data'][0])
+        [endpoint,symbol] = self.get_endpoint_type_and_symbol(item_data['channel'])
+        return super()._parse_item(endpoint, item_data['data'][0]+[symbol])
 
     # returns endpoint type without symbols and params
-    def get_endpoint_type(self, endpoint):
+    def get_endpoint_type_and_symbol(self, endpoint):
         ep_regex=re.compile('ok_sub_spot_(?P<symbol>[a-z]{3}_[a-z]{3})_(?P<endpoint>[a-z]+)')
-        ep_type= ep_regex.match(endpoint).groupdict()['endpoint']
-        return self.endpoint_by_event_type[ep_type]
+        ep_groups= ep_regex.match(endpoint).groupdict()
+        return [self.endpoint_by_event_type[ep_groups['endpoint']],ep_groups['symbol']]
 
     #full of dirty hacks dou to different time formats in different data sources. 'Deals' request returns Time instead of Timestamp =(
+    # WARNING! It has a bug with timezone and date shifting for 'hh:mm:ss' formatted input values
     def _convert_timestamp_from_platform(self, timestamp):
         if not timestamp:
             return timestamp
