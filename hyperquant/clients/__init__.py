@@ -1109,6 +1109,7 @@ class WSConverter(ProtocolConverter):
         return result
 
     def _generate_subscription(self, endpoint, symbol=None, **params):
+        #self.logger.debug("_gen_subscr: ep: %s, sym: %s, params: %s", endpoint, symbol, params)
         channel = self._get_platform_endpoint(endpoint, {ParamName.SYMBOL: symbol, **params})
         return channel
 
@@ -1201,7 +1202,6 @@ class WSClient(BaseClient):
             subscribe(symbols=["BTCUSD"])  # subscribe to all supported endpoints for "BTCUSD"
             unsubscribe(endpoints=["TRADE"])  # unsubscribe all "TRADE" channels - for all symbols
             unsubscribe()  # unsubscribe all (except "TRADE" which has been already unsubscribed before)
-
             subscribe(endpoints=["TRADE"], symbols=["BTCUSD"])  # subscribe to all supported endpoints for "BTCUSD"
             unsubscribe()  # unsubscribe all "TRADE" channels
             subscribe()  # subscribe to all "TRADE" channels back because it was directly
@@ -1213,7 +1213,7 @@ class WSClient(BaseClient):
         :param symbols:
         :return:
         """
-
+        self.logger.debug("Subscribe params: %s", params)
         self.logger.debug("Subscribe on endpoints: %s and symbols: %s prev: %s %s",
                           endpoints, symbols, self.endpoints, self.symbols)
         # if not endpoints and not symbols:
@@ -1249,11 +1249,14 @@ class WSClient(BaseClient):
 
             # if self.current_subscriptions:
             #     self.prev_subscriptions = self.current_subscriptions
-            self.current_subscriptions.clear()
+            if self.current_subscriptions:
+                self.current_subscriptions.clear()
             if self.failed_subscriptions:
                 self.failed_subscriptions.clear() 
-            self.pending_subscriptions.clear()
-            self.successful_subscriptions.clear()
+            if self.pending_subscriptions:
+                self.pending_subscriptions.clear()
+            if self.successful_subscriptions:
+                self.successful_subscriptions.clear()
         else:
             if not endpoints:
                 endpoints = self.endpoints
@@ -1317,7 +1320,6 @@ class WSClient(BaseClient):
 
     def connect(self, version=None):
         # Check ready
-        print('url:'+self.url) 
         if not self.current_subscriptions:
             self.logger.warning("Please subscribe before connect.")
             return
@@ -1389,7 +1391,7 @@ class WSClient(BaseClient):
 
         # json -> items
         result = self._parse(None, data)
-
+        self.logger.info("Item parsed: %s",result)
         # Process items
         self._data_buffer = []
 

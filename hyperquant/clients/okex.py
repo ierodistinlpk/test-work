@@ -1,6 +1,6 @@
-import hashlib
-import hmac
-from operator import itemgetter
+import zlib
+import re
+import datetime
 
 from hyperquant.api import Platform, Sorting, Interval, Direction, OrderType
 from hyperquant.clients import WSClient, Endpoint, Trade, Error, ErrorCode, \
@@ -177,7 +177,6 @@ class OkexRESTClient(PrivatePlatformRESTClient):
             param_name_lookup[ParamName.LIMIT]: limit,
             param_name_lookup[ParamName.FROM_TIME]: from_time,
         }
-        print (params)
         result = self._send("GET", endpoint, params, version, **kwargs)
         return result
 
@@ -191,9 +190,29 @@ class OkexWSConverterV1(WSConverter):
     #IS_SUBSCRIPTION_COMMAND_SUPPORTED = False
 
     supported_endpoints = [Endpoint.TRADE, Endpoint.CANDLE]
-    # symbol_endpoints = [Endpoint.TRADE, Endpoint.CANDLE]
-    # supported_symbols = None
+    symbol_endpoints = [Endpoint.TRADE, Endpoint.CANDLE]
+    #supported_symbols = ['ltc_btc', 'eth_btc', 'etc_btc', 'bch_btc', 'btc_usdt', 'eth_usdt', 'ltc_usdt', 'etc_usdt', 'bch_usdt', 'etc_eth', 'bt1_btc', 'bt2_btc', 'btg_btc', 'qtum_btc', 'hsr_btc', 'neo_btc', 'gas_btc', 'qtum_usdt', 'hsr_usdt', 'neo_usdt', 'gas_usdt']
+    supported_symbols = ['ltc_btc', 'eth_btc']
+    interval_endpoints= {Endpoint.CANDLE}
+    supported_intervals=[Interval.MIN_1, Interval.MIN_3, Interval.MIN_5, Interval.MIN_15, Interval.MIN_30, Interval.HRS_1, Interval.HRS_2, Interval.HRS_4, Interval.HRS_6, Interval.HRS_8, Interval.HRS_12, Interval.DAY_1, Interval.WEEK_1]
+    subscribed_interval=None
+    param_value_lookup = {
+        Interval.MIN_1: "1min",
+        Interval.MIN_3: "3min",
+        Interval.MIN_5: "5min",
+        Interval.MIN_15: "15min",
+        Interval.MIN_30: "30min",
+        Interval.HRS_1: "1hour",
+        Interval.HRS_2: "2hour",
+        Interval.HRS_4: "4hour",
+        Interval.HRS_6: "6hour",
+        Interval.HRS_8: "8hour",
+        Interval.HRS_12: "12hour",
+        Interval.DAY_1: "1day",
+        Interval.WEEK_1: "1week",
+    }
 
+    
     # Settings:
 
     # Converting info:
@@ -216,7 +235,7 @@ class OkexWSConverterV1(WSConverter):
     }
     event_type_param = "e"
     endpoint_by_event_type = {
-        "trade": Endpoint.TRADE,
+        "deals": Endpoint.TRADE,
         "kline": Endpoint.CANDLE,
     }
 	
@@ -228,21 +247,49 @@ class OkexWSConverterV1(WSConverter):
 
     # For converting time
     is_source_in_milliseconds = True
-    def _get_platform_endpoint(self, endpoint, params):
-        # Convert our code's endpoint to custom platform's endpoint
 
-        # Endpoint.TRADE -> "trades/{symbol}" or "trades" or lambda params: "trades"
-        platform_endpoint = self.endpoint_lookup.get(endpoint, endpoint) if self.endpoint_lookup else endpoint
-        if callable(platform_endpoint):
-            platform_endpoint = platform_endpoint(params)
-        self.logger.debug("EP: %s, Params: %s",platform_endpoint,params)    
-        if platform_endpoint:
-            platform_endpoint = platform_endpoint.format(**params)
+    def generate_subscriptions(self, endpoints, symbols, **params):
+        #handle interval parameter
+        if self.interval_endpoints.intersection(endpoints):
+            if 'interval' in params:
+                #save for the future and run with unchanged params
+                self.subscribed_interval=self.param_value_lookup.get(params['interval'],params['interval'])
+            else:
+                #mutate params with previous interval
+                params['interval']=self.subscribed_interval
+        #self.logger.debug("gen_subscr_end: %s", params)
+        return super().generate_subscriptions(endpoints,symbols, **params)
 
-        return platform_endpoint
+    def _parse_item(self, endpoint, item_data):
+        endpoint = self.get_endpoint_type(item_data['channel'])
+        super()._parse_item(endpoint, item_data['data'][0])
 
+    # returns endpoint type without symbols and params
+    def get_endpoint_type(self, endpoint):
+        ep_regex=re.compile('ok_sub_spot_(?P<symbol>[a-z]{3}_[a-z]{3})_(?P<endpoint>[a-z]+)')
+        ep_type= ep_regex.match(endpoint).groupdict()['endpoint']
+        return self.endpoint_by_event_type[ep_type]
 
+    #full of dirty hacks dou to different time formats in different data sources. 'Deals' request returns Time instead of Timestamp =(
+    def _convert_timestamp_from_platform(self, timestamp):
+        if not timestamp:
+            return timestamp
+        if type(timestamp)==str and timestamp[2]==':' :
+            [hour,minute,sec]=map(lambda x: int(x), timestamp.split(':'))
+            #assuming that it's today transaction. no more info in data
+            timestamp=int(datetime.datetime.today().replace(hour=hour,minute=minute,second=sec).timestamp())
+        elif self.is_source_in_milliseconds:
+            timestamp = int(timestamp)/1000
+            # if int(timestamp) == timestamp:
+            #     timestamp = int(timestamp)
+        elif self.is_source_in_timestring:
+            timestamp = parser.parse(timestamp).timestamp()
 
+        if self.use_milliseconds:
+            timestamp = int(timestamp * 1000)
+        return timestamp
+
+        
 
 class OkexWSClient(WSClient):
     platform_id = Platform.OKEX
@@ -251,49 +298,24 @@ class OkexWSClient(WSClient):
     _converter_class_by_version = {
         "1": OkexWSConverterV1,
     }
-
-    # @property
-    # def url(self):
-    #     # Generate subscriptions
-    #     if not self.current_subscriptions:
-    #         self.logger.warning("Making URL while current_subscriptions are empty. "
-    #                             "There is no sense to connect without subscriptions.")
-    #         subscriptions = ""
-    #         # # There is no sense to connect without subscriptions
-    #         # return None
-    #     elif len(self.current_subscriptions) > 1:
-    #         subscriptions = "stream?streams=" + "/".join(self.current_subscriptions)
-    #     else:
-    #         subscriptions = "ws/" + "".join(self.current_subscriptions)
-
-    #     self.is_subscribed_with_url = True
-    #     return super().url + subscriptions
-
-
+        
+    def _on_message(self, message):
+        super()._on_message(inflate(message).decode('utf-8'))
+        
     def _send_subscribe(self, subscriptions):
+        self.logger.debug("_send_subscr: %s",subscriptions)
         for subscription in subscriptions:
-            print ('subscr:'+subscription)
-            self.ws.send("{'event':'addChannel','channel':{subscription}}");
+            self.ws.send("{'event':'addChannel','channel':'"+subscription+"'}")
 
     def _send_unsubscribe(self, subscriptions):
         for subscription in subscriptions:
-            print ('subscr:'+subscription)
-            self.ws.send("{'event':'delChannel','channel':{subscription}}");
+            self.ws.send("{'event':'delChannel','channel':'"+subscription+"'}")
 
-    def subscribe(self, endpoints=None, symbols=None, **params):
-        self._check_params(endpoints, symbols, **params)
 
-        super().subscribe(endpoints, symbols, **params)
-
-    def unsubscribe(self, endpoints=None, symbols=None, **params):
-        self._check_params(endpoints, symbols, **params)
-
-        super().unsubscribe(endpoints, symbols, **params)
-
-    def _check_params(self, endpoints=None, symbols=None, **params):
-        LEVELS_AVAILABLE = [5, 10, 20]
-        if endpoints and Endpoint.ORDER_BOOK in endpoints and ParamName.LEVEL in params and \
-                params.get(ParamName.LEVEL) not in LEVELS_AVAILABLE:
-            self.logger.error("For %s endpoint %s param must be of values: %s, but set: %s",
-                              Endpoint.ORDER_BOOK, ParamName.LEVEL, LEVELS_AVAILABLE,
-                              params.get(ParamName.LEVEL))
+def inflate(data):
+    decompress = zlib.decompressobj(
+            -zlib.MAX_WBITS  # see above
+    )
+    inflated = decompress.decompress(data)
+    inflated += decompress.flush()
+    return inflated
