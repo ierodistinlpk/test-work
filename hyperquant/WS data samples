@@ -1,0 +1,7 @@
+DEBUG:WSClient.OKEX.v1:On message: [{"channel":"ok_sub_spot_ltc_eth_deals","data":[["71857648","0.2795","1.195697","07:59:34","ask"]],"binary":0}]
+INFO:WSClient.OKEX.v1:Item parsed: [None]
+DEBUG:WSClient.OKEX.v1:On message: [{"channel":"ok_sub_spot_ltc_btc_deals","data":[["379531187","0.00911616","18.477588","08:02:25","bid"]],"binary":0}]
+INFO:WSClient.OKEX.v1:Item parsed: [None]
+DEBUG:WSClient.OKEX.v1:On message: [{"channel":"ok_sub_spot_ltc_btc_deals","data":[["379531189","0.00911616","12.934311","08:02:25","bid"]],"binary":0}]
+INFO:WSClient.OKEX.v1:Item parsed: [None]
+DEBUG:WSClient.OKEX.v1:On message: [{"binary":0,"channel":"ok_sub_spot_ltc_btc_kline_1min","data":[["1548374520000","0.00910763","0.00911616","0.00910763","0.00911616","98.904574"]]}]
