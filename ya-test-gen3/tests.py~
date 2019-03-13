@@ -1,0 +1,37 @@
+import unittest
+from itertools import tee
+from generator import sum_generators
+class TestGenSumm(unittest.Testcase):
+    def SetUp(self):
+        src_a=iter([
+            {'a':1},
+            {'b':1},
+            {'c':1},
+            {'d':1},
+            {'e':1}
+        ])
+        src_b=iter([
+            {'a':1},
+            {'b':2},
+            {'c':3},
+            {'d':4},
+            {'':5}
+        ])
+        src_b=iter([
+            {'a':5},
+            {'b':5},
+            {'c':5},
+            {None:5}
+        ])
+    
+    def test_full_params_ok(self):
+        res=sum_generators(self.src_a,self.src_b,self.src_c,3,False)
+        self.assertEqual(res,{'a':7,'b':8,'c':9},'summ fit')
+
+    def test_no_len_params_ok(self):
+        res=sum_generators(self.src_a,self.src_b,self.src_c,stop_on_empty=False)
+        self.assertEqual(res,{'a':7,'b':8,'c':9,'d':5,'e':1,"":5,None:5},'summ fit')
+
+    def test_not_a_generator_params_raise(self):
+        res=sum_generators(self.src_a,self.src_b,[{'a':1},{b:2}],2,stop_on_empty=False)
+        self.assertEqual(res,{'a':7,'b':8,'c':9,'d':5,'e':1,"":5,None:5},'summ fit')

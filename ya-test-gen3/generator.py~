@@ -1,0 +1,12 @@
+from random import randrange as randrange
+
+def generator(maxkey,maxval,length=None):
+    strs=['aa','bb','cc','dd','ee']
+    n=0
+    while True:
+        if length and n>=length:
+            return
+        k=next(strs)+randrange(maxkey)
+        v=randrange(maxval)
+        yield({k:v})
+        n+=1

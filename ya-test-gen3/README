@@ -1,0 +1,7 @@
+Just a test task with 3 generators summary
+
+the main concept is in generator.sum_generators
+see tests.py examples how to call it
+
+There is no strict check that keys are strings because there was no strict definitions 'strings only' in description.
+it will throw TypeError if any dict value is not a number, but if pass with float now (check is too simple to show it).
